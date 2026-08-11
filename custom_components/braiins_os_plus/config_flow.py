@@ -9,7 +9,8 @@ import time  # Import the time library
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .const import DOMAIN
+from .api import async_legacy_login
+from .const import API_MODE, API_MODE_LEGACY_GRAPHQL, API_MODE_REST, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,26 +41,33 @@ class BraiinsOSPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             if response.status == 200:
                                 data = await response.json()
                                 token = data.get("token")
+                                if not token:
+                                    errors["base"] = "cannot_connect"
+                                    token = None
+                                else:
+                                    errors.pop("base", None)
                                 timeout_s = data.get("timeout_s", 3600)
 
                                 # Calculate the expiration time (with a 60-second buffer)
                                 expires_at = time.time() + timeout_s - 60
 
-                                await self.async_set_unique_id(miner_ip)
-                                self._abort_if_unique_id_configured()
+                                if token:
+                                    await self.async_set_unique_id(miner_ip)
+                                    self._abort_if_unique_id_configured()
 
                                 # ### THE FIX IS HERE ###
                                 # Store everything needed for re-authentication
-                                return self.async_create_entry(
-                                    title=miner_ip,
-                                    data={
-                                        "miner_ip": miner_ip,
-                                        "username": username,
-                                        "password": password or "",
-                                        "token": token,
-                                        "expires_at": expires_at,
-                                    },
-                                )
+                                    return self.async_create_entry(
+                                        title=miner_ip,
+                                        data={
+                                            "miner_ip": miner_ip,
+                                            "username": username,
+                                            "password": password or "",
+                                            "token": token,
+                                            "expires_at": expires_at,
+                                            API_MODE: API_MODE_REST,
+                                        },
+                                    )
                             elif response.status == 401:
                                 errors["base"] = "invalid_auth"
                             else:
@@ -70,6 +78,32 @@ class BraiinsOSPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                     response_text,
                                 )
                                 errors["base"] = "cannot_connect"
+
+                            if errors:
+                                legacy_ok, legacy_error = await async_legacy_login(
+                                    session,
+                                    f"http://{miner_ip}/graphql",
+                                    username,
+                                    password or "",
+                                )
+                                if legacy_ok:
+                                    await self.async_set_unique_id(miner_ip)
+                                    self._abort_if_unique_id_configured()
+                                    return self.async_create_entry(
+                                        title=miner_ip,
+                                        data={
+                                            "miner_ip": miner_ip,
+                                            "username": username,
+                                            "password": password or "",
+                                            API_MODE: API_MODE_LEGACY_GRAPHQL,
+                                        },
+                                    )
+
+                                _LOGGER.debug(
+                                    "Legacy GraphQL login also failed for %s: %s",
+                                    miner_ip,
+                                    legacy_error,
+                                )
 
                 except (aiohttp.ClientError, asyncio.TimeoutError) as err:
                     _LOGGER.error("Failed to connect to miner at %s: %s", miner_ip, err)

@@ -37,9 +37,22 @@ async def async_setup_entry(
         DecrementPowerButton(api, config_entry, coordinator),
         IncrementHashrateButton(api, config_entry, coordinator),
         DecrementHashrateButton(api, config_entry, coordinator),
-        PauseMinerButton(api, config_entry, coordinator),
-        ResumeMinerButton(api, config_entry, coordinator),
     ]
+    if api.is_legacy:
+        buttons.extend(
+            [
+                StopMinerButton(api, config_entry, coordinator),
+                StartMinerButton(api, config_entry, coordinator),
+                RestartMinerButton(api, config_entry, coordinator),
+            ]
+        )
+    else:
+        buttons.extend(
+            [
+                PauseMinerButton(api, config_entry, coordinator),
+                ResumeMinerButton(api, config_entry, coordinator),
+            ]
+        )
     async_add_entities(buttons)
 
 
@@ -68,6 +81,54 @@ class BraiinsButton(CoordinatorEntity, ButtonEntity):
             model=ident.get("miner_model") or "Miner with Braiins OS+",
             sw_version=data.get("bos_version", {}).get("current"),
         )
+
+
+class StopMinerButton(BraiinsButton):
+    """Button to stop BOSminer through the legacy GraphQL API."""
+
+    _attr_name = "Stop Miner"
+    _attr_icon = "mdi:stop"
+
+    def __init__(self, api: BraiinsAPI, config_entry: ConfigEntry, coordinator) -> None:
+        """Initialize the stop button."""
+        super().__init__(api, config_entry, coordinator)
+        self._attr_unique_id = f"{config_entry.entry_id}_stop_miner"
+
+    async def async_press(self) -> None:
+        """Stop BOSminer."""
+        await self._api.pause_mining()
+
+
+class StartMinerButton(BraiinsButton):
+    """Button to start BOSminer through the legacy GraphQL API."""
+
+    _attr_name = "Start Miner"
+    _attr_icon = "mdi:play"
+
+    def __init__(self, api: BraiinsAPI, config_entry: ConfigEntry, coordinator) -> None:
+        """Initialize the start button."""
+        super().__init__(api, config_entry, coordinator)
+        self._attr_unique_id = f"{config_entry.entry_id}_start_miner"
+
+    async def async_press(self) -> None:
+        """Start BOSminer."""
+        await self._api.resume_mining()
+
+
+class RestartMinerButton(BraiinsButton):
+    """Button to restart BOSminer through the legacy GraphQL API."""
+
+    _attr_name = "Restart Miner"
+    _attr_icon = "mdi:restart"
+
+    def __init__(self, api: BraiinsAPI, config_entry: ConfigEntry, coordinator) -> None:
+        """Initialize the restart button."""
+        super().__init__(api, config_entry, coordinator)
+        self._attr_unique_id = f"{config_entry.entry_id}_restart_miner"
+
+    async def async_press(self) -> None:
+        """Restart BOSminer."""
+        await self._api.restart_mining()
 
 
 class IncrementPowerButton(BraiinsButton):

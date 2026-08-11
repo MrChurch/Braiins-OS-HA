@@ -2,6 +2,10 @@
 
 DOMAIN = "braiins_os_plus"
 
+API_MODE = "api_mode"
+API_MODE_REST = "rest"
+API_MODE_LEGACY_GRAPHQL = "legacy_graphql"
+
 # List of platforms that this integration will support
 PLATFORMS = ["button", "number", "select", "sensor"]
 

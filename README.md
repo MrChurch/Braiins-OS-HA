@@ -24,6 +24,7 @@ This is a custom integration for Home Assistant that allows you to control and m
     -   Set specific **Power Targets** (Watts) or **Hashrate Targets** (TH/s).
     -   Dynamic slider limits: Sliders automatically adjust their min/max range based on your specific miner's hardware constraints.
 -   **Robust Authentication**: Automatically handles the renewal of authentication tokens to ensure the connection is always active.
+-   **Legacy Support**: Braiins OS+ 22.08.x miners can use the legacy GraphQL API with a `session_id` cookie instead of the newer REST API.
 
 
 ## Prerequisites
@@ -97,12 +98,19 @@ The integration will log in and create a new device with all associated entities
 | **Total Hashrate** | Combined real-time hashrate of all boards. | TH/s |
 | **Miner Consumption** | Real-time power draw from the wall. | W |
 | **Miner Efficiency** | Real-time efficiency (reports 0.0 when paused). | J/TH |
+| **Accepted** | Total number of shares accepted by the pool. | shares |
+| **Blocks Found** | Total number of blocks found by the miner. | blocks |
+| **Best Share** | Highest share difficulty reported by the miner. | — |
 | **Chip Temperature** | The highest chip temperature reported by cooling system. | °C |
 | **Board Temperature** | Calculated highest surface temperature among all boards. | °C |
 | **Fan Speed** | Actual RPM for each individual fan. | RPM |
 | **Fan Target Speed** | The duty cycle percentage for each fan. | % |
 
 *Per-hashboard sensors for hashrate and temperature are also created automatically.*
+
+### Legacy GraphQL mode
+
+During setup, the integration tries the current REST API first and falls back to the legacy GraphQL API when available. Legacy miners expose `Accepted`, `Blocks Found`, `Best Share`, hashrate, power, and temperature through `bosminer.info.summary`. Start, stop, and restart use the corresponding legacy GraphQL mutations.
 
 ## Creating an Energy Sensor (kWh)
 

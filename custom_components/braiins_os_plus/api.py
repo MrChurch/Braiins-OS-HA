@@ -12,7 +12,129 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
+from .const import API_MODE_LEGACY_GRAPHQL
+
 _LOGGER = logging.getLogger(__name__)
+
+LEGACY_GRAPHQL_LOGIN = """
+mutation ($username: String!, $password: String!) {
+  auth {
+    login(username: $username, password: $password) {
+      __typename
+      ... on AuthError {
+        message
+      }
+    }
+  }
+}
+"""
+
+LEGACY_GRAPHQL_EXTEND = """
+mutation {
+  auth {
+    extend {
+      __typename
+      ... on AuthError {
+        message
+      }
+    }
+  }
+}
+"""
+
+LEGACY_GRAPHQL_STATS = """
+query {
+  bosminer {
+    info {
+      modelName
+      summary {
+        realHashrate { mhsAv mhs5S mhs1M mhs5M mhs15M mhs24H }
+        poolStatus
+        shares {
+          acceptedDifficulty
+          acceptedSolutions
+          rejectedDifficulty
+          rejectedSolutions
+          rejectedRatio
+          staleDifficulty
+          staleSolutions
+          staleRatio
+        }
+        foundBlocks
+        bestShare
+        power { limitW approxConsumptionW efficiencyWMhs }
+        temperature { name degreesC }
+      }
+    }
+  }
+}
+"""
+
+LEGACY_GRAPHQL_ACTION = """
+mutation {
+  bosminer {
+    ACTION {
+      __typename
+      ... on VoidResult { void }
+      ... on BosminerError { message }
+    }
+  }
+}
+"""
+
+LEGACY_GRAPHQL_PERFORMANCE = """
+mutation ($input: PerformanceIn!, $apply: Boolean!) {
+  bosminer {
+    config {
+      updatePerformance(input: $input, apply: $apply) {
+        __typename
+        ... on PerformanceError { message }
+        ... on AttributeError { message }
+      }
+    }
+  }
+}
+"""
+
+
+async def async_legacy_login(
+    session: aiohttp.ClientSession,
+    url: str,
+    username: str,
+    password: str,
+) -> tuple[bool, str | None]:
+    """Log in to the legacy GraphQL API and return its session cookie."""
+    try:
+        async with asyncio.timeout(10):
+            async with session.post(
+                url,
+                json={
+                    "query": LEGACY_GRAPHQL_LOGIN,
+                    "variables": {"username": username, "password": password},
+                },
+            ) as response:
+                payload = await response.json(content_type=None)
+
+                if response.status != 200:
+                    return False, f"HTTP {response.status}"
+
+                errors = payload.get("errors") or []
+                if errors:
+                    return False, errors[0].get("message", "GraphQL login failed")
+
+                login_result = (
+                    payload.get("data", {}).get("auth", {}).get("login", {})
+                )
+                if login_result.get("__typename") != "VoidResult":
+                    return False, login_result.get("message", "GraphQL login failed")
+
+                session_cookie = response.cookies.get("session_id")
+                if session_cookie is None:
+                    return False, "GraphQL login returned no session_id cookie"
+
+                return True, session_cookie.value
+    except (TimeoutError, aiohttp.ClientError, ValueError) as err:
+        return False, str(err)
 
 
 class BraiinsAPI:
@@ -25,8 +147,12 @@ class BraiinsAPI:
         self._hass = hass
         self._entry = entry
         self._session = session
-        self._base_url = f"http://{self._entry.data['miner_ip']}/api/v1"
-        self._token = self._entry.data["token"]
+        miner_ip = self._entry.data["miner_ip"]
+        self._legacy = self._entry.data.get("api_mode") == API_MODE_LEGACY_GRAPHQL
+        self._base_url = f"http://{miner_ip}/api/v1"
+        self._graphql_url = f"http://{miner_ip}/graphql"
+        self._token = self._entry.data.get("token")
+        self._legacy_session_id: str | None = None
         self._headers = {"Authorization": self._token}
         self._lock = asyncio.Lock()
         self._last_data = {}
@@ -35,6 +161,11 @@ class BraiinsAPI:
         """Public method to get a value from the internal cache."""
         return self._last_data.get(key)
 
+    @property
+    def is_legacy(self) -> bool:
+        """Return whether this miner uses the legacy GraphQL API."""
+        return self._legacy
+
     def update_last_data(self, key: str, value: Any) -> None:
         """Public method to update the internal cache for optimistic UI updates."""
         if self._last_data is not None:
@@ -42,6 +173,24 @@ class BraiinsAPI:
 
     async def async_relogin(self) -> bool:
         """Perform a login to get a new token."""
+        if self._legacy:
+            success, session_id = await async_legacy_login(
+                self._session,
+                self._graphql_url,
+                self._entry.data["username"],
+                self._entry.data["password"],
+            )
+            if success:
+                self._legacy_session_id = session_id
+                _LOGGER.info("Successfully authenticated with legacy Braiins GraphQL API")
+                return True
+
+            _LOGGER.warning(
+                "Failed to authenticate with legacy Braiins GraphQL API: %s",
+                session_id,
+            )
+            return False
+
         url = f"{self._base_url}/auth/login"
         payload = {
             "username": self._entry.data["username"],
@@ -86,6 +235,11 @@ class BraiinsAPI:
 
     async def _is_token_valid_and_renew(self) -> bool:
         """Helper to check token validity and renew if needed."""
+        if self._legacy:
+            if self._legacy_session_id is None:
+                return await self.async_relogin()
+            return True
+
         async with self._lock:
             if time.time() > self._entry.data["expires_at"]:
                 _LOGGER.info("Token expired based on time, attempting re-login")
@@ -143,6 +297,9 @@ class BraiinsAPI:
 
     async def async_update_data(self) -> dict[str, Any]:
         """Fetch data from all endpoints and combine them. Raise UpdateFailed only if all fail."""
+        if self._legacy:
+            return await self._async_update_legacy_data()
+
         results = await asyncio.gather(
             self._make_get_request("miner/details"),
             self._make_get_request("configuration/constraints"),
@@ -225,16 +382,176 @@ class BraiinsAPI:
                 )
                 if th is not None:
                     combined_data["hashrate_target"] = th
-            except KeyError, AttributeError:
+            except (KeyError, AttributeError):
                 pass
 
         self._last_data = combined_data
         return combined_data
 
+    async def _async_graphql_request(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        retry_auth: bool = True,
+    ) -> dict[str, Any] | None:
+        """Execute a legacy GraphQL request using the session cookie."""
+        if not await self._is_token_valid_and_renew():
+            return None
+
+        headers = {"Content-Type": "application/json"}
+        if self._legacy_session_id:
+            headers["Cookie"] = f"session_id={self._legacy_session_id}"
+
+        try:
+            async with asyncio.timeout(10):
+                async with self._session.post(
+                    self._graphql_url,
+                    headers=headers,
+                    json={"query": query, "variables": variables or {}},
+                ) as response:
+                    payload = await response.json(content_type=None)
+        except (TimeoutError, aiohttp.ClientError, ValueError) as err:
+            _LOGGER.warning("Failed to query legacy Braiins GraphQL API: %s", err)
+            return None
+
+        errors = payload.get("errors") or []
+        unauthorized = any(
+            error.get("extensions", {}).get("code") == "UNAUTHORIZED"
+            or error.get("message") == "Unauthorized access"
+            for error in errors
+        )
+        if unauthorized and retry_auth:
+            self._legacy_session_id = None
+            if await self.async_relogin():
+                return await self._async_graphql_request(query, variables, False)
+
+        if errors:
+            _LOGGER.warning(
+                "Legacy Braiins GraphQL request failed: %s",
+                "; ".join(error.get("message", "unknown error") for error in errors),
+            )
+            return None
+
+        return payload.get("data")
+
+    async def _async_update_legacy_data(self) -> dict[str, Any]:
+        """Fetch and normalize stats from the legacy GraphQL API."""
+        data = await self._async_graphql_request(LEGACY_GRAPHQL_STATS)
+        if not data:
+            if self._last_data:
+                return self._last_data
+            raise UpdateFailed("Failed to fetch data from the legacy Braiins GraphQL API.")
+
+        info = data.get("bosminer", {}).get("info", {})
+        summary = info.get("summary", {})
+        real_hashrate = summary.get("realHashrate", {})
+        shares = summary.get("shares", {})
+        power = summary.get("power") or {}
+        temperature = summary.get("temperature") or {}
+
+        mhs_5s = real_hashrate.get("mhs5S")
+        legacy_stats = {
+            "miner_stats": {
+                "real_hashrate": {
+                    "last_5s": {
+                        "terahash_per_second": (
+                            float(mhs_5s) / 1_000_000 if mhs_5s is not None else None
+                        )
+                    }
+                },
+                "found_blocks": summary.get("foundBlocks"),
+                "best_share": summary.get("bestShare"),
+            },
+            "pool_stats": {
+                "accepted_shares": shares.get("acceptedSolutions"),
+                "accepted_difficulty": shares.get("acceptedDifficulty"),
+                "rejected_shares": shares.get("rejectedSolutions"),
+                "rejected_difficulty": shares.get("rejectedDifficulty"),
+                "rejected_ratio": shares.get("rejectedRatio"),
+                "stale_shares": shares.get("staleSolutions"),
+                "stale_difficulty": shares.get("staleDifficulty"),
+                "stale_ratio": shares.get("staleRatio"),
+            },
+            "power_stats": {
+                "approximated_consumption": {"watt": power.get("approxConsumptionW")},
+                "efficiency": {
+                    "joule_per_terahash": (
+                        float(power["efficiencyWMhs"]) * 1_000_000
+                        if power.get("efficiencyWMhs") is not None
+                        else None
+                    )
+                },
+            },
+        }
+
+        combined_data = {
+            "details": {
+                "hostname": info.get("modelName") or "Braiins OS+ Legacy Miner",
+                "miner_identity": {"miner_model": info.get("modelName")},
+            },
+            "constraints": {},
+            "cooling": (
+                {
+                    "highest_temperature": {
+                        "temperature": {"degree_c": temperature.get("degreesC")}
+                    }
+                }
+                if temperature
+                else {}
+            ),
+            "hashboards": [],
+            "stats": legacy_stats,
+            "performance_mode": self._last_data.get("performance_mode"),
+            "power_target": power.get("limitW"),
+            "hashrate_target": self._last_data.get("hashrate_target"),
+            "legacy_pool_status": summary.get("poolStatus"),
+            "legacy_hashrate": real_hashrate,
+        }
+        self._last_data = combined_data
+        return combined_data
+
+    async def _async_legacy_action(self, action: str) -> bool:
+        """Run a start, stop, or restart action on a legacy miner."""
+        data = await self._async_graphql_request(
+            LEGACY_GRAPHQL_ACTION.replace("ACTION", action)
+        )
+        result = (data or {}).get("bosminer", {}).get(action, {})
+        if result.get("__typename") == "VoidResult":
+            return True
+        _LOGGER.error("Legacy Braiins action %s failed: %s", action, result.get("message"))
+        return False
+
+    async def update_performance(
+        self, performance: dict[str, Any], apply: bool = True
+    ) -> bool:
+        """Update legacy frequency/voltage settings through GraphQL."""
+        if not self._legacy:
+            return False
+
+        data = await self._async_graphql_request(
+            LEGACY_GRAPHQL_PERFORMANCE,
+            {"input": performance, "apply": apply},
+        )
+        result = (
+            (data or {}).get("bosminer", {})
+            .get("config", {})
+            .get("updatePerformance", {})
+        )
+        if result.get("__typename") == "PerformanceOut":
+            return True
+        _LOGGER.error(
+            "Legacy performance update failed: %s", result.get("message")
+        )
+        return False
+
     async def _make_request(
         self, method: str, endpoint: str, data: dict | None = None
     ) -> bool:
         """Make a PUT or PATCH request for button presses."""
+        if self._legacy:
+            _LOGGER.warning("Endpoint %s is not supported by the legacy GraphQL API", endpoint)
+            return False
+
         if not await self._is_token_valid_and_renew():
             return False
 
@@ -339,11 +656,21 @@ class BraiinsAPI:
 
     async def pause_mining(self) -> bool:
         """Pause mining on the miner."""
+        if self._legacy:
+            return await self._async_legacy_action("stop")
         return await self._make_request("put", "actions/pause")
 
     async def resume_mining(self) -> bool:
         """Resume mining on the miner."""
+        if self._legacy:
+            return await self._async_legacy_action("start")
         return await self._make_request("put", "actions/resume")
+
+    async def restart_mining(self) -> bool:
+        """Restart BOSminer on a legacy miner."""
+        if self._legacy:
+            return await self._async_legacy_action("restart")
+        return False
 
     async def set_performance_mode(self, mode: str, value: float) -> bool:
         """Switch mode and send a specific target value."""

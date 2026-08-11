@@ -63,6 +63,9 @@ async def async_setup_entry(
             HighestBoardTempSensor(coordinator),
             MinerConsumptionSensor(coordinator),
             MinerEfficiencySensor(coordinator),
+            AcceptedSharesSensor(coordinator),
+            BlocksFoundSensor(coordinator),
+            BestShareSensor(coordinator),
         ]
     )
 
@@ -156,6 +159,65 @@ class MinerEfficiencySensor(BraiinsSensor):
         return 0.0
 
 
+class AcceptedSharesSensor(BraiinsSensor):
+    """Sensor for the total number of shares accepted by the pool."""
+
+    def __init__(self, coordinator) -> None:
+        """Initialize the accepted shares sensor."""
+        super().__init__(coordinator, "accepted")
+        self._attr_name = "Accepted"
+        self._attr_native_unit_of_measurement = "shares"
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_icon = "mdi:check-circle-outline"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the total number of accepted shares."""
+        stats = self.coordinator.data.get("stats", {})
+        pool_stats = stats.get("pool_stats", {})
+        accepted_shares = pool_stats.get("accepted_shares")
+        return int(accepted_shares) if accepted_shares is not None else None
+
+
+class BlocksFoundSensor(BraiinsSensor):
+    """Sensor for the total number of blocks found by the miner."""
+
+    def __init__(self, coordinator) -> None:
+        """Initialize the blocks found sensor."""
+        super().__init__(coordinator, "blocks_found")
+        self._attr_name = "Blocks Found"
+        self._attr_native_unit_of_measurement = "blocks"
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_icon = "mdi:cube-outline"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the total number of blocks found by the miner."""
+        stats = self.coordinator.data.get("stats", {})
+        miner_stats = stats.get("miner_stats", {})
+        found_blocks = miner_stats.get("found_blocks")
+        return int(found_blocks) if found_blocks is not None else None
+
+
+class BestShareSensor(BraiinsSensor):
+    """Sensor for the miner's best share difficulty."""
+
+    def __init__(self, coordinator) -> None:
+        """Initialize the best share sensor."""
+        super().__init__(coordinator, "best_share")
+        self._attr_name = "Best Share"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:trophy-outline"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the miner's best share difficulty."""
+        stats = self.coordinator.data.get("stats", {})
+        miner_stats = stats.get("miner_stats", {})
+        best_share = miner_stats.get("best_share")
+        return int(best_share) if best_share is not None else None
+
+
 class TotalHashrateSensor(BraiinsSensor):
     """Sensor for the total real hashrate of all boards."""
 
@@ -181,6 +243,13 @@ class TotalHashrateSensor(BraiinsSensor):
                 for board in hashboards
             )
             return round(total_ghs / 1000, 2)
+
+        stats = self.coordinator.data.get("stats", {}) if self.coordinator.data else {}
+        miner_stats = stats.get("miner_stats", {})
+        last_5s = miner_stats.get("real_hashrate", {}).get("last_5s", {})
+        if (hashrate_ths := last_5s.get("terahash_per_second")) is not None:
+            return round(float(hashrate_ths), 2)
+
         return None
 
 
