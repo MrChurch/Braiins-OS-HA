@@ -10,6 +10,7 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .const import API_MODE_LEGACY_GRAPHQL
@@ -20,11 +21,13 @@ LEGACY_GRAPHQL_LOGIN = """
 mutation ($username: String!, $password: String!) {
   auth {
     login(username: $username, password: $password) {
-      __typename
-      ... on AuthError {
+      ... on Error {
         message
+        __typename
       }
+      __typename
     }
+    __typename
   }
 }
 """
@@ -45,6 +48,13 @@ mutation {
 LEGACY_GRAPHQL_STATS = """
 query {
   bosminer {
+    metadata {
+      hashChain {
+        voltagePerHashChain
+        frequency { default min max step unit }
+        voltage { default min max step unit }
+      }
+    }
     info {
       modelName
       summary {
@@ -66,6 +76,12 @@ query {
         temperature { name degreesC }
       }
     }
+    config {
+      __typename
+      ... on BosminerConfig {
+        hashChainGlobal { frequency voltage asicBoost }
+      }
+    }
   }
 }
 """
@@ -83,15 +99,37 @@ mutation {
 """
 
 LEGACY_GRAPHQL_PERFORMANCE = """
-mutation ($input: PerformanceIn!, $apply: Boolean!) {
+mutation ($perfInput: PerformanceIn!, $apply: Boolean!) {
   bosminer {
     config {
-      updatePerformance(input: $input, apply: $apply) {
+      updatePerformance(input: $perfInput, apply: $apply) {
+        ... on AttributeError {
+          message
+          __typename
+        }
+        ... on PerformanceError {
+          message
+          hashChains {
+            ... on HashChainError {
+              name
+              voltage
+              frequency
+              __typename
+            }
+            __typename
+          }
+          globalVoltage
+          globalFrequency
+          __typename
+        }
+        ... on PerformanceOut {
+          __typename
+        }
         __typename
-        ... on PerformanceError { message }
-        ... on AttributeError { message }
       }
+      __typename
     }
+    __typename
   }
 }
 """
@@ -132,6 +170,11 @@ async def async_legacy_login(
                 if session_cookie is None:
                     return False, "GraphQL login returned no session_id cookie"
 
+                # Keep the cookie in the shared HA session where possible. The
+                # explicit Cookie header below is still used as a fallback for
+                # IP-based miners whose cookie jar rejects host-only cookies.
+                session.cookie_jar.update_cookies(response.cookies, response.url)
+
                 return True, session_cookie.value
     except (TimeoutError, aiohttp.ClientError, ValueError) as err:
         return False, str(err)
@@ -153,6 +196,7 @@ class BraiinsAPI:
         self._graphql_url = f"http://{miner_ip}/graphql"
         self._token = self._entry.data.get("token")
         self._legacy_session_id: str | None = None
+        self._legacy_performance_error: str | None = None
         self._headers = {"Authorization": self._token}
         self._lock = asyncio.Lock()
         self._last_data = {}
@@ -170,6 +214,14 @@ class BraiinsAPI:
         """Public method to update the internal cache for optimistic UI updates."""
         if self._last_data is not None:
             self._last_data[key] = value
+
+    def update_pending_performance(self, values: dict[str, float]) -> None:
+        """Keep locally staged legacy performance values across coordinator polls."""
+        performance = dict(self._last_data.get("legacy_performance", {}))
+        pending = dict(performance.get("pending", {}))
+        pending.update(values)
+        performance["pending"] = pending
+        self._last_data["legacy_performance"] = performance
 
     async def async_relogin(self) -> bool:
         """Perform a login to get a new token."""
@@ -442,12 +494,18 @@ class BraiinsAPI:
                 return self._last_data
             raise UpdateFailed("Failed to fetch data from the legacy Braiins GraphQL API.")
 
-        info = data.get("bosminer", {}).get("info", {})
+        bosminer = data.get("bosminer", {})
+        info = bosminer.get("info", {})
         summary = info.get("summary", {})
         real_hashrate = summary.get("realHashrate", {})
         shares = summary.get("shares", {})
         power = summary.get("power") or {}
         temperature = summary.get("temperature") or {}
+
+        metadata = bosminer.get("metadata", {}).get("hashChain") or {}
+        config = bosminer.get("config") or {}
+        hash_chain_global = config.get("hashChainGlobal") or {}
+        previous_performance = self._last_data.get("legacy_performance", {})
 
         mhs_5s = real_hashrate.get("mhs5S")
         legacy_stats = {
@@ -506,6 +564,14 @@ class BraiinsAPI:
             "hashrate_target": self._last_data.get("hashrate_target"),
             "legacy_pool_status": summary.get("poolStatus"),
             "legacy_hashrate": real_hashrate,
+            "legacy_performance": {
+                "metadata": metadata,
+                "current": {
+                    "globalFrequency": hash_chain_global.get("frequency"),
+                    "globalVoltage": hash_chain_global.get("voltage"),
+                },
+                "pending": previous_performance.get("pending", {}),
+            },
         }
         self._last_data = combined_data
         return combined_data
@@ -528,9 +594,10 @@ class BraiinsAPI:
         if not self._legacy:
             return False
 
+        self._legacy_performance_error = None
         data = await self._async_graphql_request(
             LEGACY_GRAPHQL_PERFORMANCE,
-            {"input": performance, "apply": apply},
+            {"perfInput": performance, "apply": apply},
         )
         result = (
             (data or {}).get("bosminer", {})
@@ -539,10 +606,11 @@ class BraiinsAPI:
         )
         if result.get("__typename") == "PerformanceOut":
             return True
-        _LOGGER.error(
-            "Legacy performance update failed: %s", result.get("message")
-        )
-        return False
+
+        error = result.get("message") or "Legacy performance update failed"
+        self._legacy_performance_error = error
+        _LOGGER.error("Legacy performance update failed: %s", error)
+        raise HomeAssistantError(error)
 
     async def _make_request(
         self, method: str, endpoint: str, data: dict | None = None

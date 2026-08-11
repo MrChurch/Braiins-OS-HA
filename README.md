@@ -84,12 +84,15 @@ The integration will log in and create a new device with all associated entities
 | `number.hashrate_target` | Set specific hashrate target in TH/s. |
 | `number.power_adjustment_step` | **Config:** Set how many Watts buttons change (e.g., 100W, 250W). |
 | `number.hashrate_adjustment_step`| **Config:** Set how many TH/s buttons change (e.g., 1.0, 5.0). |
+| `number.legacy_frequency` | Legacy GraphQL: stage global frequency using miner-provided limits. |
+| `number.legacy_voltage` | Legacy GraphQL: stage global voltage using miner-provided limits. |
 | `button.increment_power_target` | Increases Power Target by the configured step. |
 | `button.decrement_power_target` | Decreases Power Target by the configured step. |
 | `button.increment_hashrate_target`| Increases Hashrate Target by the configured step. |
 | `button.decrement_hashrate_target`| Decreases Hashrate Target by the configured step. |
 | `button.pause_miner` | Pauses mining operations. |
 | `button.resume_miner` | Resumes mining operations. |
+| `button.apply_performance` | Legacy GraphQL: apply staged frequency and voltage together. |
 
 ### Sensors (Updated every 5s)
 

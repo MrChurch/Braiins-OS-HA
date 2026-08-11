@@ -44,6 +44,7 @@ async def async_setup_entry(
                 StopMinerButton(api, config_entry, coordinator),
                 StartMinerButton(api, config_entry, coordinator),
                 RestartMinerButton(api, config_entry, coordinator),
+                ApplyPerformanceButton(api, config_entry, coordinator),
             ]
         )
     else:
@@ -129,6 +130,45 @@ class RestartMinerButton(BraiinsButton):
     async def async_press(self) -> None:
         """Restart BOSminer."""
         await self._api.restart_mining()
+
+
+class ApplyPerformanceButton(BraiinsButton):
+    """Apply staged legacy frequency and voltage values."""
+
+    _attr_name = "Apply Performance"
+    _attr_icon = "mdi:check-bold"
+
+    def __init__(self, api: BraiinsAPI, config_entry: ConfigEntry, coordinator) -> None:
+        """Initialize the performance apply button."""
+        super().__init__(api, config_entry, coordinator)
+        self._attr_unique_id = f"{config_entry.entry_id}_apply_performance"
+
+    @property
+    def available(self) -> bool:
+        """Only enable the button when a local performance change is staged."""
+        pending = self.coordinator.data.get("legacy_performance", {}).get(
+            "pending", {}
+        )
+        return super().available and bool(pending)
+
+    async def async_press(self) -> None:
+        """Apply staged values in one GraphQL mutation."""
+        performance = self.coordinator.data.get("legacy_performance", {})
+        pending = dict(performance.get("pending", {}))
+        if not pending:
+            return
+
+        await self._api.update_performance(pending, apply=True)
+
+        new_data = dict(self.coordinator.data)
+        new_performance = dict(performance)
+        current = dict(new_performance.get("current", {}))
+        current.update(pending)
+        new_performance["current"] = current
+        new_performance["pending"] = {}
+        self._api.update_last_data("legacy_performance", new_performance)
+        new_data["legacy_performance"] = new_performance
+        self.coordinator.async_set_updated_data(new_data)
 
 
 class IncrementPowerButton(BraiinsButton):

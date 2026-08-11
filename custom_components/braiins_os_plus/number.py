@@ -29,14 +29,132 @@ async def async_setup_entry(
     coordinator = domain_data["coordinator"]
     api = domain_data["api"]
 
-    async_add_entities(
-        [
-            BraiinsPowerTargetNumber(coordinator, api, entry),
-            BraiinsPowerStepNumber(coordinator, entry),
-            BraiinsHashrateTargetNumber(coordinator, api, entry),
-            BraiinsHashrateStepNumber(coordinator, entry),
-        ]
-    )
+    entities = [
+        BraiinsPowerTargetNumber(coordinator, api, entry),
+        BraiinsPowerStepNumber(coordinator, entry),
+        BraiinsHashrateTargetNumber(coordinator, api, entry),
+        BraiinsHashrateStepNumber(coordinator, entry),
+    ]
+
+    if api.is_legacy:
+        performance = coordinator.data.get("legacy_performance", {})
+        metadata = performance.get("metadata", {})
+        frequency_metadata = metadata.get("frequency", {})
+        voltage_metadata = metadata.get("voltage", {})
+        metadata_complete = all(
+            item.get("default") is not None
+            and item.get("min") is not None
+            and item.get("max") is not None
+            for item in (frequency_metadata, voltage_metadata)
+        )
+        if metadata_complete:
+            entities.extend(
+                [
+                    BraiinsLegacyFrequencyNumber(coordinator, api, entry),
+                    BraiinsLegacyVoltageNumber(coordinator, api, entry),
+                ]
+            )
+
+    async_add_entities(entities)
+
+
+class BraiinsLegacyPerformanceNumber(CoordinatorEntity, NumberEntity):
+    """Locally staged legacy performance value."""
+
+    performance_key: str
+    metadata_key: str
+    entity_suffix: str
+    _attr_unit: str
+
+    def __init__(self, coordinator, api, entry: ConfigEntry) -> None:
+        """Initialize a staged legacy performance number."""
+        super().__init__(coordinator)
+        self._api = api
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_{self.entity_suffix}"
+        self._attr_has_entity_name = True
+        self._attr_mode = NumberMode.BOX
+        self._attr_native_unit_of_measurement = self._attr_unit
+        data = coordinator.data.get("details", {})
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": data.get("hostname", "Braiins Miner"),
+        }
+
+    @property
+    def _performance_data(self) -> dict:
+        """Return current legacy performance metadata and values."""
+        return self.coordinator.data.get("legacy_performance", {})
+
+    @property
+    def _metadata(self) -> dict:
+        """Return metadata for this value."""
+        return self._performance_data.get("metadata", {}).get(self.metadata_key, {})
+
+    @property
+    def native_min_value(self) -> float:
+        """Return the device-provided minimum value."""
+        value = self._metadata.get("min")
+        if value is None:
+            value = self._metadata.get("default")
+        return float(value)
+
+    @property
+    def native_max_value(self) -> float:
+        """Return the device-provided maximum value."""
+        value = self._metadata.get("max")
+        if value is None:
+            value = self._metadata.get("default")
+        return float(value)
+
+    @property
+    def native_step(self) -> float:
+        """Return the device-provided step size."""
+        return float(self._metadata.get("step") or 1.0)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return a staged value, then the current value, then the device default."""
+        performance = self._performance_data
+        pending = performance.get("pending", {})
+        current = performance.get("current", {})
+        value = pending.get(self.performance_key, current.get(self.performance_key))
+        if value is None:
+            value = self._metadata.get("default")
+        return float(value) if value is not None else None
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Stage a value locally; the Apply button performs the miner write."""
+        new_data = dict(self.coordinator.data)
+        performance = dict(new_data.get("legacy_performance", {}))
+        pending = dict(performance.get("pending", {}))
+        pending[self.performance_key] = float(value)
+        performance["pending"] = pending
+        self._api.update_pending_performance({self.performance_key: float(value)})
+        new_data["legacy_performance"] = performance
+        self.coordinator.async_set_updated_data(new_data)
+
+
+class BraiinsLegacyFrequencyNumber(BraiinsLegacyPerformanceNumber):
+    """Locally staged legacy global frequency."""
+
+    performance_key = "globalFrequency"
+    metadata_key = "frequency"
+    entity_suffix = "legacy_frequency"
+    _attr_name = "Frequency"
+    _attr_unit = "MHz"
+    _attr_icon = "mdi:sine-wave"
+
+
+class BraiinsLegacyVoltageNumber(BraiinsLegacyPerformanceNumber):
+    """Locally staged legacy global voltage."""
+
+    performance_key = "globalVoltage"
+    metadata_key = "voltage"
+    entity_suffix = "legacy_voltage"
+    _attr_name = "Voltage"
+    _attr_unit = "V"
+    _attr_icon = "mdi:flash-outline"
 
 
 class BraiinsHashrateTargetNumber(CoordinatorEntity, NumberEntity):
