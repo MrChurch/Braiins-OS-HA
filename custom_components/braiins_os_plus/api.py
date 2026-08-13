@@ -523,7 +523,18 @@ class BraiinsAPI:
         metadata = bosminer.get("metadata", {}).get("hashChain") or {}
         config = bosminer.get("config") or {}
         hash_chain_global = config.get("hashChainGlobal") or {}
-        hash_chains = config.get("hashChains") or []
+        hash_chains = []
+        for hash_chain in config.get("hashChains") or []:
+            # The legacy API returns null for a board field when that board
+            # inherits the global setting. Normalize to the effective value;
+            # metadata defaults are only the allowed defaults, not the live
+            # configuration.
+            normalized_chain = dict(hash_chain)
+            if normalized_chain.get("frequency") is None:
+                normalized_chain["frequency"] = hash_chain_global.get("frequency")
+            if normalized_chain.get("voltage") is None:
+                normalized_chain["voltage"] = hash_chain_global.get("voltage")
+            hash_chains.append(normalized_chain)
         previous_performance = self._last_data.get("legacy_performance", {})
 
         mhs_5s = real_hashrate.get("mhs5S")
