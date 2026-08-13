@@ -1,6 +1,8 @@
 # custom_components/braiins_os_plus/number.py
 """Braiins OS+ integration number entities."""
 
+import re
+
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfPower
@@ -54,6 +56,19 @@ async def async_setup_entry(
                     BraiinsLegacyVoltageNumber(coordinator, api, entry),
                 ]
             )
+            for hash_chain in performance.get("current", {}).get("hashChains", []):
+                name = hash_chain.get("name")
+                if name:
+                    entities.extend(
+                        [
+                            BraiinsLegacyHashChainFrequencyNumber(
+                                coordinator, api, entry, name
+                            ),
+                            BraiinsLegacyHashChainVoltageNumber(
+                                coordinator, api, entry, name
+                            ),
+                        ]
+                    )
 
     async_add_entities(entities)
 
@@ -153,6 +168,88 @@ class BraiinsLegacyVoltageNumber(BraiinsLegacyPerformanceNumber):
     metadata_key = "voltage"
     entity_suffix = "legacy_voltage"
     _attr_name = "Voltage"
+    _attr_unit = "V"
+    _attr_icon = "mdi:flash-outline"
+
+
+class BraiinsLegacyHashChainNumber(BraiinsLegacyPerformanceNumber):
+    """Locally staged performance value for one legacy hash chain."""
+
+    def __init__(self, coordinator, api, entry: ConfigEntry, hash_chain_name: str) -> None:
+        """Initialize a hash-chain performance number."""
+        self._hash_chain_name = hash_chain_name
+        super().__init__(coordinator, api, entry)
+        suffix = re.sub(r"[^a-z0-9]+", "_", hash_chain_name.lower()).strip("_")
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{self.entity_suffix}_{suffix or 'unknown'}"
+        )
+        self._attr_name = f"{self._attr_name} {hash_chain_name}"
+
+    @property
+    def _current_hash_chain(self) -> dict:
+        """Return the current value for this hash chain."""
+        for chain in self._performance_data.get("current", {}).get("hashChains", []):
+            if chain.get("name") == self._hash_chain_name:
+                return chain
+        return {}
+
+    @property
+    def _pending_hash_chain(self) -> dict:
+        """Return staged values for this hash chain."""
+        for chain in self._performance_data.get("pending", {}).get("hashChains", []):
+            if chain.get("name") == self._hash_chain_name:
+                return chain
+        return {}
+
+    @property
+    def native_value(self) -> float | None:
+        """Return staged, current, or default value for this hash chain."""
+        value = self._pending_hash_chain.get(self.performance_key)
+        if value is None:
+            value = self._current_hash_chain.get(self.performance_key)
+        if value is None:
+            value = self._metadata.get("default")
+        return float(value) if value is not None else None
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Stage a value locally; the Apply button performs the miner write."""
+        new_data = dict(self.coordinator.data)
+        performance = dict(new_data.get("legacy_performance", {}))
+        pending = dict(performance.get("pending", {}))
+        chains = {
+            chain.get("name"): dict(chain)
+            for chain in pending.get("hashChains", [])
+            if chain.get("name")
+        }
+        chain = chains.setdefault(self._hash_chain_name, {"name": self._hash_chain_name})
+        chain[self.performance_key] = float(value)
+        pending["hashChains"] = list(chains.values())
+        performance["pending"] = pending
+        self._api.update_pending_hash_chain(
+            self._hash_chain_name, {self.performance_key: float(value)}
+        )
+        new_data["legacy_performance"] = performance
+        self.coordinator.async_set_updated_data(new_data)
+
+
+class BraiinsLegacyHashChainFrequencyNumber(BraiinsLegacyHashChainNumber):
+    """Locally staged frequency for one legacy hash chain."""
+
+    performance_key = "frequency"
+    metadata_key = "frequency"
+    entity_suffix = "legacy_hashchain_frequency"
+    _attr_name = "Hashboard Frequency"
+    _attr_unit = "MHz"
+    _attr_icon = "mdi:sine-wave"
+
+
+class BraiinsLegacyHashChainVoltageNumber(BraiinsLegacyHashChainNumber):
+    """Locally staged voltage for one legacy hash chain."""
+
+    performance_key = "voltage"
+    metadata_key = "voltage"
+    entity_suffix = "legacy_hashchain_voltage"
+    _attr_name = "Hashboard Voltage"
     _attr_unit = "V"
     _attr_icon = "mdi:flash-outline"
 

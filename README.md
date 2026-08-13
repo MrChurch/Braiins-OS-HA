@@ -86,6 +86,8 @@ The integration will log in and create a new device with all associated entities
 | `number.hashrate_adjustment_step`| **Config:** Set how many TH/s buttons change (e.g., 1.0, 5.0). |
 | `number.legacy_frequency` | Legacy GraphQL: stage global frequency using miner-provided limits. |
 | `number.legacy_voltage` | Legacy GraphQL: stage global voltage using miner-provided limits. |
+| `number.legacy_hashchain_frequency_<name>` | Legacy GraphQL: stage frequency for an individual hashboard. |
+| `number.legacy_hashchain_voltage_<name>` | Legacy GraphQL: stage voltage for an individual hashboard. |
 | `button.increment_power_target` | Increases Power Target by the configured step. |
 | `button.decrement_power_target` | Decreases Power Target by the configured step. |
 | `button.increment_hashrate_target`| Increases Hashrate Target by the configured step. |
@@ -113,7 +115,7 @@ The integration will log in and create a new device with all associated entities
 
 ### Legacy GraphQL mode
 
-During setup, the integration tries the current REST API first and falls back to the legacy GraphQL API when available. Legacy miners expose `Accepted`, `Blocks Found`, `Best Share`, hashrate, power, and temperature through `bosminer.info.summary`. Start, stop, and restart use the corresponding legacy GraphQL mutations.
+During setup, the integration tries the current REST API first and falls back to the legacy GraphQL API when available. Legacy miners expose `Accepted`, `Blocks Found`, `Best Share`, hashrate, power, and temperature through `bosminer.info.summary`. Start, stop, and restart use the corresponding legacy GraphQL mutations. Individual hashboard frequency and voltage values are staged locally and applied together with `button.apply_performance`.
 
 ## Creating an Energy Sensor (kWh)
 

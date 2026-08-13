@@ -163,7 +163,23 @@ class ApplyPerformanceButton(BraiinsButton):
         new_data = dict(self.coordinator.data)
         new_performance = dict(performance)
         current = dict(new_performance.get("current", {}))
-        current.update(pending)
+        for key, value in pending.items():
+            if key != "hashChains":
+                current[key] = value
+
+        if pending_hash_chains := pending.get("hashChains"):
+            current_hash_chains = {
+                chain.get("name"): dict(chain)
+                for chain in current.get("hashChains", [])
+                if chain.get("name")
+            }
+            for staged_chain in pending_hash_chains:
+                name = staged_chain.get("name")
+                if not name:
+                    continue
+                current_chain = current_hash_chains.setdefault(name, {"name": name})
+                current_chain.update(staged_chain)
+            current["hashChains"] = list(current_hash_chains.values())
         new_performance["current"] = current
         new_performance["pending"] = {}
         self._api.update_last_data("legacy_performance", new_performance)

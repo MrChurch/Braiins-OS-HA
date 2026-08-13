@@ -80,6 +80,7 @@ query {
       __typename
       ... on BosminerConfig {
         hashChainGlobal { frequency voltage asicBoost }
+        hashChains { name enabled frequency voltage }
       }
     }
   }
@@ -220,6 +221,23 @@ class BraiinsAPI:
         performance = dict(self._last_data.get("legacy_performance", {}))
         pending = dict(performance.get("pending", {}))
         pending.update(values)
+        performance["pending"] = pending
+        self._last_data["legacy_performance"] = performance
+
+    def update_pending_hash_chain(
+        self, name: str, values: dict[str, float]
+    ) -> None:
+        """Keep locally staged values for one legacy hash chain."""
+        performance = dict(self._last_data.get("legacy_performance", {}))
+        pending = dict(performance.get("pending", {}))
+        chains = {
+            chain.get("name"): dict(chain)
+            for chain in pending.get("hashChains", [])
+            if chain.get("name")
+        }
+        chain = chains.setdefault(name, {"name": name})
+        chain.update(values)
+        pending["hashChains"] = list(chains.values())
         performance["pending"] = pending
         self._last_data["legacy_performance"] = performance
 
@@ -505,6 +523,7 @@ class BraiinsAPI:
         metadata = bosminer.get("metadata", {}).get("hashChain") or {}
         config = bosminer.get("config") or {}
         hash_chain_global = config.get("hashChainGlobal") or {}
+        hash_chains = config.get("hashChains") or []
         previous_performance = self._last_data.get("legacy_performance", {})
 
         mhs_5s = real_hashrate.get("mhs5S")
@@ -569,6 +588,7 @@ class BraiinsAPI:
                 "current": {
                     "globalFrequency": hash_chain_global.get("frequency"),
                     "globalVoltage": hash_chain_global.get("voltage"),
+                    "hashChains": hash_chains,
                 },
                 "pending": previous_performance.get("pending", {}),
             },
