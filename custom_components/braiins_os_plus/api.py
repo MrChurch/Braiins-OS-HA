@@ -57,7 +57,7 @@ query {
     }
     info {
       modelName
-      summary {
+        summary {
         realHashrate { mhsAv mhs5S mhs1M mhs5M mhs15M mhs24H }
         poolStatus
         shares {
@@ -74,6 +74,14 @@ query {
         bestShare
         power { limitW approxConsumptionW efficiencyWMhs }
         temperature { name degreesC }
+      }
+      workSolver {
+        name
+        childSolvers {
+          name
+          realHashrate { mhsAv mhs5S mhs1M mhs5M mhs15M mhs24H }
+          temperatures { name degreesC }
+        }
       }
     }
     config {
@@ -134,6 +142,95 @@ mutation ($perfInput: PerformanceIn!, $apply: Boolean!) {
   }
 }
 """
+
+
+def _legacy_solver_matches_hash_chain(solver_name: str, chain_name: str) -> bool:
+    """Match legacy work-solver names to hash-chain names."""
+    normalized_solver = "".join(char.lower() for char in solver_name if char.isalnum())
+    normalized_chain = "".join(char.lower() for char in chain_name if char.isalnum())
+    if not normalized_solver or not normalized_chain:
+        return False
+    if normalized_solver == normalized_chain:
+        return True
+    solver_digits = "".join(char for char in normalized_solver if char.isdigit())
+    chain_digits = "".join(char for char in normalized_chain if char.isdigit())
+    return bool(solver_digits and chain_digits and solver_digits == chain_digits)
+
+
+def _legacy_temperature_value(
+    temperatures: list[dict[str, Any]], preferred_words: tuple[str, ...]
+) -> float | None:
+    """Return the highest matching legacy work-solver temperature."""
+    preferred = [
+        float(item["degreesC"])
+        for item in temperatures
+        if item.get("degreesC") is not None
+        and any(
+            word in str(item.get("name", "")).lower()
+            for word in preferred_words
+        )
+    ]
+    if preferred:
+        return max(preferred)
+    values = [
+        float(item["degreesC"])
+        for item in temperatures
+        if item.get("degreesC") is not None
+    ]
+    return max(values) if values else None
+
+
+def _legacy_hashboard_data(
+    hash_chains: list[dict[str, Any]], work_solver: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Normalize legacy work-solver child data to the REST hashboard shape."""
+    if not hash_chains:
+        return []
+
+    solvers = (work_solver or {}).get("childSolvers") or []
+    boards = []
+    for index, hash_chain in enumerate(hash_chains):
+        chain_name = str(hash_chain.get("name", index + 1))
+        solver = next(
+            (
+                candidate
+                for candidate in solvers
+                if _legacy_solver_matches_hash_chain(
+                    str(candidate.get("name", "")), chain_name
+                )
+            ),
+            solvers[index]
+            if len(solvers) == len(hash_chains) and index < len(solvers)
+            else {},
+        )
+        real_hashrate = solver.get("realHashrate") or {}
+        mhs_5s = real_hashrate.get("mhs5S")
+        temperatures = solver.get("temperatures") or []
+        board_temperature = _legacy_temperature_value(temperatures, ("board", "pcb"))
+        chip_temperature = _legacy_temperature_value(
+            temperatures, ("chip", "asic", "die", "core")
+        )
+        board = {
+            "id": chain_name,
+            "enabled": hash_chain.get("enabled"),
+            "stats": {
+                "real_hashrate": {
+                    "last_5s": {
+                        "gigahash_per_second": (
+                            float(mhs_5s) / 1_000 if mhs_5s is not None else None
+                        )
+                    }
+                }
+            },
+        }
+        if board_temperature is not None:
+            board["board_temp"] = {"degree_c": board_temperature}
+        if chip_temperature is not None:
+            board["highest_chip_temp"] = {
+                "temperature": {"degree_c": chip_temperature}
+            }
+        boards.append(board)
+    return boards
 
 
 async def async_legacy_login(
@@ -515,6 +612,7 @@ class BraiinsAPI:
         bosminer = data.get("bosminer", {})
         info = bosminer.get("info", {})
         summary = info.get("summary", {})
+        work_solver = info.get("workSolver") or {}
         real_hashrate = summary.get("realHashrate", {})
         shares = summary.get("shares", {})
         power = summary.get("power") or {}
@@ -587,7 +685,7 @@ class BraiinsAPI:
                 if temperature
                 else {}
             ),
-            "hashboards": [],
+            "hashboards": _legacy_hashboard_data(hash_chains, work_solver),
             "stats": legacy_stats,
             "performance_mode": self._last_data.get("performance_mode"),
             "power_target": power.get("limitW"),

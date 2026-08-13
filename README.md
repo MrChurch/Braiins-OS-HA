@@ -115,7 +115,7 @@ The integration will log in and create a new device with all associated entities
 
 ### Legacy GraphQL mode
 
-During setup, the integration tries the current REST API first and falls back to the legacy GraphQL API when available. Legacy miners expose `Accepted`, `Blocks Found`, `Best Share`, hashrate, power, and temperature through `bosminer.info.summary`. Start, stop, and restart use the corresponding legacy GraphQL mutations. Individual hashboard frequency and voltage values are staged locally and applied together with `button.apply_performance`.
+During setup, the integration tries the current REST API first and falls back to the legacy GraphQL API when available. Legacy miners expose `Accepted`, `Blocks Found`, `Best Share`, hashrate, power, and temperature through `bosminer.info.summary`. Per-hashboard hashrate and temperatures are read from `bosminer.info.workSolver.childSolvers`. Start, stop, and restart use the corresponding legacy GraphQL mutations. Individual hashboard frequency and voltage values are staged locally and applied together with `button.apply_performance`.
 
 ## Creating an Energy Sensor (kWh)
 
