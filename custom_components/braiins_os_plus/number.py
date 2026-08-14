@@ -7,6 +7,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -140,6 +141,11 @@ class BraiinsLegacyPerformanceNumber(CoordinatorEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Stage a value locally; the Apply button performs the miner write."""
+        if float(value) > self.native_max_value:
+            raise HomeAssistantError(
+                f"{self._attr_name} must not exceed {self.native_max_value:g} "
+                f"{self._attr_native_unit_of_measurement}."
+            )
         new_data = dict(self.coordinator.data)
         performance = dict(new_data.get("legacy_performance", {}))
         pending = dict(performance.get("pending", {}))
@@ -213,6 +219,11 @@ class BraiinsLegacyHashChainNumber(BraiinsLegacyPerformanceNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         """Stage a value locally; the Apply button performs the miner write."""
+        if float(value) > self.native_max_value:
+            raise HomeAssistantError(
+                f"{self._attr_name} must not exceed {self.native_max_value:g} "
+                f"{self._attr_native_unit_of_measurement}."
+            )
         new_data = dict(self.coordinator.data)
         performance = dict(new_data.get("legacy_performance", {}))
         pending = dict(performance.get("pending", {}))

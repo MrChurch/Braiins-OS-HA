@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -13,7 +14,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import API_MODE_LEGACY_GRAPHQL
+from .const import (
+    API_MODE_LEGACY_GRAPHQL,
+    LEGACY_S9_MAX_FREQUENCY,
+    LEGACY_S9_MAX_VOLTAGE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,6 +162,56 @@ def _legacy_solver_matches_hash_chain(solver_name: str, chain_name: str) -> bool
     return bool(solver_digits and chain_digits and solver_digits == chain_digits)
 
 
+def _is_legacy_s9_model(model_name: Any) -> bool:
+    """Return whether a legacy model name identifies an Antminer S9."""
+    return bool(re.search(r"\bs9[a-z0-9-]*\b", str(model_name or "").lower()))
+
+
+def _apply_legacy_model_limits(metadata: dict[str, Any], model_name: Any) -> dict[str, Any]:
+    """Apply conservative model-specific limits to legacy metadata."""
+    if not _is_legacy_s9_model(model_name):
+        return metadata
+
+    limited = dict(metadata)
+    for key, maximum in (
+        ("frequency", LEGACY_S9_MAX_FREQUENCY),
+        ("voltage", LEGACY_S9_MAX_VOLTAGE),
+    ):
+        setting = dict(limited.get(key) or {})
+        if setting.get("max") is None or float(setting["max"]) > maximum:
+            setting["max"] = maximum
+        if setting.get("default") is not None and float(setting["default"]) > maximum:
+            setting["default"] = maximum
+        limited[key] = setting
+    return limited
+
+
+def _validate_legacy_performance_limits(
+    performance: dict[str, Any], model_name: Any
+) -> None:
+    """Reject unsafe S9 frequency or voltage values before a GraphQL write."""
+    if not _is_legacy_s9_model(model_name):
+        return
+
+    checks = [
+        ("globalFrequency", performance.get("globalFrequency"), LEGACY_S9_MAX_FREQUENCY, "MHz"),
+        ("globalVoltage", performance.get("globalVoltage"), LEGACY_S9_MAX_VOLTAGE, "V"),
+    ]
+    for chain in performance.get("hashChains") or []:
+        name = chain.get("name", "unknown")
+        checks.extend(
+            [
+                (f"Hashboard {name} frequency", chain.get("frequency"), LEGACY_S9_MAX_FREQUENCY, "MHz"),
+                (f"Hashboard {name} voltage", chain.get("voltage"), LEGACY_S9_MAX_VOLTAGE, "V"),
+            ]
+        )
+    for label, value, maximum, unit in checks:
+        if value is not None and float(value) > maximum:
+            raise HomeAssistantError(
+                f"S9 limit exceeded: {label} must not exceed {maximum:g} {unit}."
+            )
+
+
 def _legacy_temperature_value(
     temperatures: list[dict[str, Any]], preferred_words: tuple[str, ...]
 ) -> float | None:
@@ -295,6 +350,7 @@ class BraiinsAPI:
         self._token = self._entry.data.get("token")
         self._legacy_session_id: str | None = None
         self._legacy_performance_error: str | None = None
+        self._legacy_model_name: str | None = None
         self._headers = {"Authorization": self._token}
         self._lock = asyncio.Lock()
         self._last_data = {}
@@ -611,6 +667,8 @@ class BraiinsAPI:
 
         bosminer = data.get("bosminer", {})
         info = bosminer.get("info", {})
+        model_name = info.get("modelName")
+        self._legacy_model_name = model_name
         summary = info.get("summary", {})
         work_solver = info.get("workSolver") or {}
         real_hashrate = summary.get("realHashrate", {})
@@ -618,7 +676,9 @@ class BraiinsAPI:
         power = summary.get("power") or {}
         temperature = summary.get("temperature") or {}
 
-        metadata = bosminer.get("metadata", {}).get("hashChain") or {}
+        metadata = _apply_legacy_model_limits(
+            bosminer.get("metadata", {}).get("hashChain") or {}, model_name
+        )
         config = bosminer.get("config") or {}
         hash_chain_global = config.get("hashChainGlobal") or {}
         hash_chains = []
@@ -672,8 +732,8 @@ class BraiinsAPI:
 
         combined_data = {
             "details": {
-                "hostname": info.get("modelName") or "Braiins OS+ Legacy Miner",
-                "miner_identity": {"miner_model": info.get("modelName")},
+                "hostname": model_name or "Braiins OS+ Legacy Miner",
+                "miner_identity": {"miner_model": model_name},
             },
             "constraints": {},
             "cooling": (
@@ -723,6 +783,7 @@ class BraiinsAPI:
         if not self._legacy:
             return False
 
+        _validate_legacy_performance_limits(performance, self._legacy_model_name)
         self._legacy_performance_error = None
         data = await self._async_graphql_request(
             LEGACY_GRAPHQL_PERFORMANCE,

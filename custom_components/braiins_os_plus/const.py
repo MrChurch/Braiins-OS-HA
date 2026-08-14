@@ -14,3 +14,7 @@ DEFAULT_POWER_STEP = 250
 
 CONF_HASHRATE_STEP = "hashrate_step"
 DEFAULT_HASHRATE_STEP = 10
+
+# Conservative legacy limits for Antminer S9 hash-chain tuning.
+LEGACY_S9_MAX_FREQUENCY = 600.0
+LEGACY_S9_MAX_VOLTAGE = 8.5
