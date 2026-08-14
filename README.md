@@ -101,6 +101,7 @@ The integration will log in and create a new device with all associated entities
 | Sensor | Description | Unit |
 | :--- | :--- | :--- |
 | **Total Hashrate** | Combined real-time hashrate of all boards. | TH/s |
+| **Hashrate 15 Min** | Legacy GraphQL 15-minute hashrate average. | TH/s |
 | **Miner Consumption** | Real-time power draw from the wall. | W |
 | **Miner Efficiency** | Real-time efficiency (reports 0.0 when paused). | J/TH |
 | **Accepted** | Total number of shares accepted by the pool. | shares |
