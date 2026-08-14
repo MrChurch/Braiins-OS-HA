@@ -58,6 +58,7 @@ async def async_setup_entry(
     # Create aggregate and stats sensors
     sensors.append(TotalHashrateSensor(coordinator))
     if coordinator.data and "legacy_hashrate" in coordinator.data:
+        sensors.append(Hashrate1MinSensor(coordinator))
         sensors.append(Hashrate15MinSensor(coordinator))
     sensors.extend(
         [
@@ -272,6 +273,25 @@ class Hashrate15MinSensor(BraiinsSensor):
         legacy_hashrate = self.coordinator.data.get("legacy_hashrate", {})
         mhs_15m = legacy_hashrate.get("mhs15M")
         return round(float(mhs_15m) / 1_000_000, 2) if mhs_15m is not None else None
+
+
+class Hashrate1MinSensor(BraiinsSensor):
+    """Sensor for the legacy miner's 1-minute hashrate average."""
+
+    def __init__(self, coordinator) -> None:
+        """Initialize the 1-minute hashrate sensor."""
+        super().__init__(coordinator, "hashrate_1m")
+        self._attr_name = "Hashrate 1 Min"
+        self._attr_native_unit_of_measurement = TERAHASH_PER_SECOND
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:chart-timeline-variant"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the legacy 1-minute hashrate average in TH/s."""
+        legacy_hashrate = self.coordinator.data.get("legacy_hashrate", {})
+        mhs_1m = legacy_hashrate.get("mhs1M")
+        return round(float(mhs_1m) / 1_000_000, 2) if mhs_1m is not None else None
 
 
 class HighestChipTempSensor(BraiinsSensor):
