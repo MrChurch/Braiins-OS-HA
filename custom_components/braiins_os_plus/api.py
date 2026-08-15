@@ -378,7 +378,7 @@ class BraiinsAPI:
         self._last_data["legacy_performance"] = performance
 
     def update_pending_hash_chain(
-        self, name: str, values: dict[str, float]
+        self, name: str, values: dict[str, Any]
     ) -> None:
         """Keep locally staged values for one legacy hash chain."""
         performance = dict(self._last_data.get("legacy_performance", {}))

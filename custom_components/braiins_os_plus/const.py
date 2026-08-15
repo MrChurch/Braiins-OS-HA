@@ -7,7 +7,7 @@ API_MODE_REST = "rest"
 API_MODE_LEGACY_GRAPHQL = "legacy_graphql"
 
 # List of platforms that this integration will support
-PLATFORMS = ["button", "number", "select", "sensor"]
+PLATFORMS = ["button", "number", "select", "sensor", "switch"]
 
 CONF_POWER_STEP = "power_step"
 DEFAULT_POWER_STEP = 250
