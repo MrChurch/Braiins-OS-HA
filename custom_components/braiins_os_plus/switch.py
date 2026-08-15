@@ -101,9 +101,10 @@ class BraiinsLegacyHashChainSwitch(CoordinatorEntity, SwitchEntity):
         chain["enabled"] = enabled
         pending["hashChains"] = list(chains.values())
         performance["pending"] = pending
-        self._api.update_pending_hash_chain(
+        staged_performance = self._api.update_pending_hash_chain(
             self._hash_chain_name, {"enabled": enabled}
         )
+        if staged_performance:
+            performance = staged_performance
         new_data["legacy_performance"] = performance
         self.coordinator.async_set_updated_data(new_data)
-

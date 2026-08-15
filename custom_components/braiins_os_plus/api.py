@@ -379,20 +379,41 @@ class BraiinsAPI:
 
     def update_pending_hash_chain(
         self, name: str, values: dict[str, Any]
-    ) -> None:
+    ) -> dict[str, Any]:
         """Keep locally staged values for one legacy hash chain."""
         performance = dict(self._last_data.get("legacy_performance", {}))
         pending = dict(performance.get("pending", {}))
+        current = performance.get("current", {})
+        for key in ("globalFrequency", "globalVoltage"):
+            if key not in pending and current.get(key) is not None:
+                pending[key] = current[key]
         chains = {
             chain.get("name"): dict(chain)
             for chain in pending.get("hashChains", [])
             if chain.get("name")
         }
-        chain = chains.setdefault(name, {"name": name})
+        current_chain = next(
+            (
+                chain
+                for chain in current.get("hashChains", [])
+                if chain.get("name") == name
+            ),
+            {},
+        )
+        chain = chains.setdefault(
+            name,
+            {
+                key: current_chain[key]
+                for key in ("name", "enabled", "frequency", "voltage")
+                if current_chain.get(key) is not None
+            }
+            or {"name": name},
+        )
         chain.update(values)
         pending["hashChains"] = list(chains.values())
         performance["pending"] = pending
         self._last_data["legacy_performance"] = performance
+        return performance
 
     async def async_relogin(self) -> bool:
         """Perform a login to get a new token."""
