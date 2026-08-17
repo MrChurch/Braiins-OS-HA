@@ -2,10 +2,12 @@
 """Braiins OS+ integration button entities."""
 
 import logging
+import re
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -47,6 +49,16 @@ async def async_setup_entry(
                 ApplyPerformanceButton(api, config_entry, coordinator),
             ]
         )
+        for hash_chain in coordinator.data.get("legacy_performance", {}).get(
+            "current", {}
+        ).get("hashChains", []):
+            name = hash_chain.get("name")
+            if name:
+                buttons.append(
+                    UseGlobalHashChainValuesButton(
+                        api, config_entry, coordinator, name
+                    )
+                )
     else:
         buttons.extend(
             [
@@ -130,6 +142,49 @@ class RestartMinerButton(BraiinsButton):
     async def async_press(self) -> None:
         """Restart BOSminer."""
         await self._api.restart_mining()
+
+
+class UseGlobalHashChainValuesButton(BraiinsButton):
+    """Stage the global frequency and voltage for one hashboard."""
+
+    _attr_icon = "mdi:content-copy"
+
+    def __init__(
+        self,
+        api: BraiinsAPI,
+        config_entry: ConfigEntry,
+        coordinator,
+        hash_chain_name: str,
+    ) -> None:
+        """Initialize the use-global-values button."""
+        super().__init__(api, config_entry, coordinator)
+        self._hash_chain_name = hash_chain_name
+        suffix = re.sub(r"[^a-z0-9]+", "_", hash_chain_name.lower()).strip("_")
+        self._attr_unique_id = (
+            f"{config_entry.entry_id}_hashchain_use_global_{suffix or 'unknown'}"
+        )
+        self._attr_name = f"Hashboard {hash_chain_name} Use Global Values"
+
+    async def async_press(self) -> None:
+        """Stage current global values for this board."""
+        performance = self.coordinator.data.get("legacy_performance", {})
+        pending = performance.get("pending", {})
+        current = performance.get("current", {})
+        frequency = pending.get("globalFrequency", current.get("globalFrequency"))
+        voltage = pending.get("globalVoltage", current.get("globalVoltage"))
+
+        if frequency is None or voltage is None:
+            raise HomeAssistantError(
+                "Global frequency and voltage are not available for this miner."
+            )
+
+        staged_performance = self._api.update_pending_hash_chain(
+            self._hash_chain_name,
+            {"frequency": frequency, "voltage": voltage},
+        )
+        new_data = dict(self.coordinator.data)
+        new_data["legacy_performance"] = staged_performance
+        self.coordinator.async_set_updated_data(new_data)
 
 
 class ApplyPerformanceButton(BraiinsButton):
