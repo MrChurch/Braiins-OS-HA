@@ -57,9 +57,12 @@ async def async_setup_entry(
 
     # Create aggregate and stats sensors
     sensors.append(TotalHashrateSensor(coordinator))
-    if coordinator.data and "legacy_hashrate" in coordinator.data:
-        sensors.append(Hashrate1MinSensor(coordinator))
-        sensors.append(Hashrate15MinSensor(coordinator))
+    sensors.extend(
+        [
+            Hashrate1MinSensor(coordinator),
+            Hashrate15MinSensor(coordinator),
+        ]
+    )
     sensors.extend(
         [
             HighestChipTempSensor(coordinator),
@@ -256,8 +259,33 @@ class TotalHashrateSensor(BraiinsSensor):
         return None
 
 
+def _hashrate_window_ths(coordinator, window: str, legacy_key: str) -> float | None:
+    """Return a hashrate window from either the current or legacy API."""
+    stats = coordinator.data.get("stats", {}) if coordinator.data else {}
+    real_hashrate = stats.get("miner_stats", {}).get("real_hashrate", {})
+    value = real_hashrate.get(window)
+
+    if isinstance(value, dict):
+        if (terahash := value.get("terahash_per_second")) is not None:
+            return round(float(terahash), 2)
+        if (gigahash := value.get("gigahash_per_second")) is not None:
+            return round(float(gigahash) / 1_000, 2)
+        if (megahash := value.get("megahash_per_second")) is not None:
+            return round(float(megahash) / 1_000_000, 2)
+
+    legacy_hashrate = (
+        coordinator.data.get("legacy_hashrate", {}) if coordinator.data else {}
+    )
+    legacy_value = legacy_hashrate.get(legacy_key)
+    return (
+        round(float(legacy_value) / 1_000_000, 2)
+        if legacy_value is not None
+        else None
+    )
+
+
 class Hashrate15MinSensor(BraiinsSensor):
-    """Sensor for the legacy miner's 15-minute hashrate average."""
+    """Sensor for the miner's 15-minute hashrate average."""
 
     def __init__(self, coordinator) -> None:
         """Initialize the 15-minute hashrate sensor."""
@@ -269,14 +297,12 @@ class Hashrate15MinSensor(BraiinsSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the legacy 15-minute hashrate average in TH/s."""
-        legacy_hashrate = self.coordinator.data.get("legacy_hashrate", {})
-        mhs_15m = legacy_hashrate.get("mhs15M")
-        return round(float(mhs_15m) / 1_000_000, 2) if mhs_15m is not None else None
+        """Return the 15-minute hashrate average in TH/s."""
+        return _hashrate_window_ths(self.coordinator, "last_15m", "mhs15M")
 
 
 class Hashrate1MinSensor(BraiinsSensor):
-    """Sensor for the legacy miner's 1-minute hashrate average."""
+    """Sensor for the miner's 1-minute hashrate average."""
 
     def __init__(self, coordinator) -> None:
         """Initialize the 1-minute hashrate sensor."""
@@ -288,10 +314,8 @@ class Hashrate1MinSensor(BraiinsSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the legacy 1-minute hashrate average in TH/s."""
-        legacy_hashrate = self.coordinator.data.get("legacy_hashrate", {})
-        mhs_1m = legacy_hashrate.get("mhs1M")
-        return round(float(mhs_1m) / 1_000_000, 2) if mhs_1m is not None else None
+        """Return the 1-minute hashrate average in TH/s."""
+        return _hashrate_window_ths(self.coordinator, "last_1m", "mhs1M")
 
 
 class HighestChipTempSensor(BraiinsSensor):
