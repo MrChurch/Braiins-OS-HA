@@ -88,6 +88,7 @@ query {
           temperatures { name degreesC }
         }
       }
+      fans { name speed rpm }
     }
     config {
       __typename
@@ -286,6 +287,27 @@ def _legacy_hashboard_data(
             }
         boards.append(board)
     return boards
+
+
+def _legacy_fan_data(fans: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Normalize legacy GraphQL fan data to the REST cooling shape."""
+    normalized = []
+    for index, fan in enumerate(fans or [], start=1):
+        name = str(fan.get("name") or f"Fan {index}")
+        match = re.search(r"(\d+)", name)
+        position = int(match.group(1)) if match else index
+        speed = fan.get("speed")
+        if speed is not None and float(speed) > 1:
+            speed = float(speed) / 100
+        normalized.append(
+            {
+                "position": position,
+                "name": name,
+                "rpm": fan.get("rpm"),
+                "target_speed_ratio": speed,
+            }
+        )
+    return normalized
 
 
 async def async_legacy_login(
@@ -696,6 +718,7 @@ class BraiinsAPI:
         shares = summary.get("shares", {})
         power = summary.get("power") or {}
         temperature = summary.get("temperature") or {}
+        fans = _legacy_fan_data(info.get("fans"))
 
         metadata = _apply_legacy_model_limits(
             bosminer.get("metadata", {}).get("hashChain") or {}, model_name
@@ -751,21 +774,21 @@ class BraiinsAPI:
             },
         }
 
+        legacy_cooling = {}
+        if temperature:
+            legacy_cooling["highest_temperature"] = {
+                "temperature": {"degree_c": temperature.get("degreesC")}
+            }
+        if fans:
+            legacy_cooling["fans"] = fans
+
         combined_data = {
             "details": {
                 "hostname": model_name or "Braiins OS+ Legacy Miner",
                 "miner_identity": {"miner_model": model_name},
             },
             "constraints": {},
-            "cooling": (
-                {
-                    "highest_temperature": {
-                        "temperature": {"degree_c": temperature.get("degreesC")}
-                    }
-                }
-                if temperature
-                else {}
-            ),
+            "cooling": legacy_cooling,
             "hashboards": _legacy_hashboard_data(hash_chains, work_solver),
             "stats": legacy_stats,
             "performance_mode": self._last_data.get("performance_mode"),

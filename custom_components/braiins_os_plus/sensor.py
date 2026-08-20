@@ -2,6 +2,8 @@
 """Braiins OS+ integration sensor entities."""
 
 import logging
+from collections import deque
+from time import monotonic
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -54,6 +56,7 @@ async def async_setup_entry(
             if fan_pos is not None:
                 sensors.append(MinerFanSensor(coordinator, fan_pos))
                 sensors.append(MinerFanPercentSensor(coordinator, fan_pos))
+                sensors.append(MinerFanAverageSensor(coordinator, fan_pos))
 
     # Create aggregate and stats sensors
     sensors.append(TotalHashrateSensor(coordinator))
@@ -473,14 +476,48 @@ class MinerFanSensor(BraiinsSensor):
         self._attr_icon = "mdi:fan"
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
+    def _fan_data(self) -> dict[str, Any] | None:
+        """Return the current data for this fan."""
+        fans = self.coordinator.data.get("cooling", {}).get("fans", [])
+        return next(
+            (fan for fan in fans if fan.get("position") == self.fan_id),
+            None,
+        )
+
     @property
     def native_value(self) -> int | None:
         """Return the RPM of the fan."""
-        fans = self.coordinator.data.get("cooling", {}).get("fans", [])
-        for fan in fans:
-            if fan.get("position") == self.fan_id:
-                return fan.get("rpm")
-        return None
+        fan = self._fan_data()
+        return fan.get("rpm") if fan else None
+
+
+class MinerFanAverageSensor(MinerFanSensor):
+    """Sensor for a fan's rolling one-minute average RPM."""
+
+    def __init__(self, coordinator, fan_id: int) -> None:
+        """Initialize the one-minute fan average sensor."""
+        super().__init__(coordinator, fan_id)
+        self._attr_unique_id = f"{self._config_entry.entry_id}_fan_{fan_id}_1m"
+        self._attr_name = f"Fan {fan_id} Speed 1 Min"
+        self._samples: deque[tuple[float, float]] = deque()
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the rolling one-minute average RPM."""
+        now = monotonic()
+        fan = self._fan_data()
+        rpm = fan.get("rpm") if fan else None
+        if rpm is not None and (
+            not self._samples or now - self._samples[-1][0] >= 1
+        ):
+            self._samples.append((now, float(rpm)))
+
+        cutoff = now - 60
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+        if not self._samples:
+            return None
+        return round(sum(value for _, value in self._samples) / len(self._samples), 0)
 
 
 class MinerFanPercentSensor(BraiinsSensor):
