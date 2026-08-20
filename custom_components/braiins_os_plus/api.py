@@ -391,13 +391,40 @@ class BraiinsAPI:
         if self._last_data is not None:
             self._last_data[key] = value
 
-    def update_pending_performance(self, values: dict[str, float]) -> None:
+    def update_pending_performance(
+        self, values: dict[str, float]
+    ) -> dict[str, Any]:
         """Keep locally staged legacy performance values across coordinator polls."""
         performance = dict(self._last_data.get("legacy_performance", {}))
         pending = dict(performance.get("pending", {}))
         pending.update(values)
+
+        current = performance.get("current", {})
+        global_chain_values = {
+            key: value
+            for key, value in (
+                ("frequency", values.get("globalFrequency")),
+                ("voltage", values.get("globalVoltage")),
+            )
+            if value is not None
+        }
+        if global_chain_values:
+            chains = {
+                chain.get("name"): dict(chain)
+                for chain in current.get("hashChains", [])
+                if chain.get("name")
+            }
+            for chain in pending.get("hashChains", []):
+                if chain.get("name"):
+                    chains[chain["name"]] = dict(chain)
+            for chain in chains.values():
+                chain.update(global_chain_values)
+            if chains:
+                pending["hashChains"] = list(chains.values())
+
         performance["pending"] = pending
         self._last_data["legacy_performance"] = performance
+        return performance
 
     def update_pending_hash_chain(
         self, name: str, values: dict[str, Any]

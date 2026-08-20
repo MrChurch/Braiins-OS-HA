@@ -151,7 +151,11 @@ class BraiinsLegacyPerformanceNumber(CoordinatorEntity, NumberEntity):
         pending = dict(performance.get("pending", {}))
         pending[self.performance_key] = float(value)
         performance["pending"] = pending
-        self._api.update_pending_performance({self.performance_key: float(value)})
+        staged_performance = self._api.update_pending_performance(
+            {self.performance_key: float(value)}
+        )
+        if staged_performance:
+            performance = staged_performance
         new_data["legacy_performance"] = performance
         self.coordinator.async_set_updated_data(new_data)
 

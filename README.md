@@ -122,7 +122,7 @@ The integration will log in and create a new device with all associated entities
 
 During setup, the integration tries the current REST API first and falls back to the legacy GraphQL API when available. Legacy miners expose `Accepted`, `Blocks Found`, `Best Share`, hashrate, power, temperature, and fan data through `bosminer.info`. Per-hashboard hashrate and temperatures are read from `bosminer.info.workSolver.childSolvers`. Start, stop, and restart use the corresponding legacy GraphQL mutations. Individual hashboard frequency and voltage values are staged locally and applied together with `button.apply_performance`.
 
-For legacy Antminer S9 miners, the integration enforces a maximum frequency of 600 MHz and a maximum voltage of 8.5 V for both global and individual hashboard settings. Hashboard enable/disable changes and the per-board “Use Global Values” action are staged locally and applied with `button.apply_performance`.
+For legacy Antminer S9 miners, the integration enforces a maximum frequency of 600 MHz and a maximum voltage of 8.5 V for both global and individual hashboard settings. Changing a global S9 frequency or voltage automatically stages that changed value for every detected hashboard, so old per-board overrides do not remain active. Hashboard enable/disable changes and the per-board “Use Global Values” action are staged locally and applied with `button.apply_performance`.
 
 ## Creating an Energy Sensor (kWh)
 
